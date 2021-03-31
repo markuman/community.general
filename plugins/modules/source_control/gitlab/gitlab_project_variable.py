@@ -166,50 +166,96 @@ class GitlabProjectVariables(object):
             vars_page = self.project.variables.list(page=page_nb)
         return variables
 
-    def create_variable(self, key, value, masked, protected, variable_type, environment_scope):
+    def create_variable(self, item):
         if self._module.check_mode:
             return
+
         var = {
-            "key": key, "value": value,
-            "masked": masked, "protected": protected,
-            "variable_type": variable_type
+            "key": item.key, "value": item.value,
+            "masked": item.masked, "protected": item.protected,
+            "variable_type": item.variable_type,
+            "environment_scope": item.environment_scope
         }
-        if environment_scope is not None:
-            var["environment_scope"] = environment_scope
         return self.project.variables.create(var)
 
-    def update_variable(self, key, var, value, masked, protected, variable_type, environment_scope):
-        if (var.value == value and var.protected == protected and var.masked == masked
-                and var.variable_type == variable_type
-                and (var.environment_scope == environment_scope or environment_scope is None)):
-            return False
-
+    def update_variable(self, item):
         if self._module.check_mode:
             return True
 
-        if (var.protected == protected and var.masked == masked
-                and var.variable_type == variable_type
-                and (var.environment_scope == environment_scope or environment_scope is None)):
-            var.value = value
-            var.save()
-            return True
-
-        self.delete_variable(key)
-        self.create_variable(key, value, masked, protected, variable_type, environment_scope)
+        """
+          I'm obviously to stupid for this
+        """
+        self.delete_variable(item.key, item.environment_scope)
+        self.create_variable(item)
         return True
 
-    def delete_variable(self, key):
+    def delete_variable(self, key, scope='*'):
         if self._module.check_mode:
             return
-        return self.project.variables.delete(key)
+        return self.project.variables.delete(key, filter={'environment_scope': scope})
 
 
-def native_python_main(this_gitlab, purge, var_list, state, module):
+def compare_attributes_and_values(existing, requested):
+    return (existing.value == requested.value and
+      existing.masked == requested.masked and
+      existing.protected == requested.protected and
+      existing.variable_type = requested.variable_type)
+
+
+def native_python_main(this_gitlab, purge, var_list, state, module, requested_variables):
 
     change = False
     return_value = dict(added=list(), updated=list(), removed=list(), untouched=list())
 
-    gitlab_keys = this_gitlab.list_all_project_variables()
+    existing_variables = this_gitlab.list_all_project_variables()
+
+    already_processed = list()
+
+    for existing in existing_variables:
+        exists_but_not_request = True
+        for r_idx in range(len(requested_variables))
+            requested = requested_variables[r_idx]
+            if existing.key == requested.key:
+                if existing.environment_scope == requested.environment_scope:
+                    """
+                      key with env scope exists
+                      attributes and/or value can be different
+                    """
+                    exists_but_not_request = False
+                    already_processed.append(r_idx)
+                    if compare_attributes_and_values(existing, requested):
+                        if state == 'absent':
+                            this_gitlab.delete_variable(existing.key, existing.environment_scope)
+                            return_value['removed'].append(existing.key)
+                            change = True
+                        else:
+                            return_value['untouched'].append(existing.key)
+                    else:
+                        this_gitlab.update_variable(requested)
+                        change = True
+        if exists_but_not_request:
+            if state == 'absent' or purge:
+                this_gitlab.delete_variable(existing.key, existing.environment_scope)
+                return_value['removed'].append(existing.key)
+                change = True
+
+    for already_processed not in requested_variables
+        if state == 'present':
+            create
+        elif state == 'absent':
+            remove
+                
+
+
+    for r_idx in range(len(requested_variables)):
+        for existing_value in 
+
+
+
+
+
+
+
     existing_variables = [x.get_id() for x in gitlab_keys]
 
     for key in var_list:
@@ -275,6 +321,7 @@ def main():
         project=dict(type='str', required=True),
         purge=dict(type='bool', required=False, default=False),
         vars=dict(type='dict', required=False, default=dict(), no_log=True),
+        variables=dict(type='dict', elements='dict', required=False, no_log=True),
         state=dict(type='str', default="present", choices=["absent", "present"])
     )
 
@@ -295,6 +342,7 @@ def main():
 
     purge = module.params['purge']
     var_list = module.params['vars']
+    requested_variables = module.params['variables']
     state = module.params['state']
 
     if not HAS_GITLAB_PACKAGE:
@@ -304,7 +352,7 @@ def main():
 
     this_gitlab = GitlabProjectVariables(module=module, gitlab_instance=gitlab_instance)
 
-    change, return_value = native_python_main(this_gitlab, purge, var_list, state, module)
+    change, return_value = native_python_main(this_gitlab, purge, var_list, state, module, requested_variables)
 
     module.exit_json(changed=change, project_variable=return_value)
 
